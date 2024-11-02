@@ -15,18 +15,18 @@ type contextKey int
 
 const sessionsKey contextKey = 10912
 
-type Registry struct {
+type registry struct {
 	sessions map[string]registrySession
 }
 
-func getRegistry(r *http.Request) *Registry {
+func getRegistry(r *http.Request) *registry {
 	ctx := r.Context()
 
 	if reg := ctx.Value(sessionsKey); reg != nil {
-		return reg.(*Registry)
+		return reg.(*registry)
 	}
 
-	reg := &Registry{
+	reg := &registry{
 		sessions: make(map[string]registrySession),
 	}
 
@@ -35,11 +35,11 @@ func getRegistry(r *http.Request) *Registry {
 	return reg
 }
 
-func (r *Registry) get(name string) any {
+func (r *registry) get(name string) any {
 	return r.sessions[name]
 }
 
-func (r *Registry) set(name string, session registrySession) {
+func (r *registry) set(name string, session registrySession) {
 	r.sessions[name] = session
 }
 
