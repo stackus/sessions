@@ -12,13 +12,13 @@ A type-safe, secure cookie manager for Go. Support for custom storage and encryp
 - Simple API: use it as an easy way to set signed (and optionally
   encrypted) cookies.
 - Built-in backends to store sessions in cookies or the filesystem.
-- Flash messages: session values that last until read.
-- Convenient way to switch session persistency (aka "remember me") and set
-  other attributes.
+- Flash messages: messages that persist only for the current request, until the next request, or until read or removed.
+- Convenient way to switch session persistency (aka "remember me") and set other attributes.
 - Mechanism to rotate authentication and encryption keys.
 - Multiple sessions per request, even using different backends.
 - Interfaces and infrastructure for custom session backends: sessions from
   different stores can be retrieved and batch-saved using a common API.
+- Easy initialization of complex session data structures.
 
 ## Requirements
 - Go 1.23+
@@ -43,12 +43,13 @@ import (
 
 // create a type to hold the session data
 type SessionData struct {
+	sessions.Flash
 	UserID  int
 	Scopes  []string
 	IsAdmin bool
 }
 
-const myHashKey = "it's-a-secret-to-everybody."
+const myHashKey = []byte("it's-a-secret-to-everybody.")
 
 func main() {
 	// create a store; the CookieStore will save the session data in a cookie
@@ -61,6 +62,7 @@ func main() {
 	
 	// create the cookie options that will dictate how the cookie is saved by the browsers
 	cookieOptions := sessions.NewCookieOptions()
+	cookieOptions.Name = "my-session"
 	cookieOptions.MaxAge = 3600 // 1 hour
 	
 	// create a new session manager for SessionData and with the cookieOptions, store, and 
@@ -69,14 +71,19 @@ func main() {
 	
 	// later in an HTTP handler get the session for the request; if it doesn't exist, a 
 	// new session is initialized and can be checked with the `IsNew` value
-	session, _ := sessionManager.Get(r, "my-session")
+	session, _ := sessionManager.Get(r)
 	
 	// access the session data directly and with type safety
 	session.Values.UserID = 1
 	session.Values.Scopes = []string{"read", "write"}
+	// use the embedded Flash type to add flash messages to the session
+	session.Values.Add("success", "You have successfully logged in!")
 	
 	// save the session data
 	_ = session.Save(w, r)
+	
+	// Redirect or render the response
+	http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 }
 ```
 
@@ -133,6 +140,44 @@ change the default behavior of the Codec.
 - `WithBlock`: sets the block cipher used by the codec, defaults to aes.NewCipher
 - `WithSerializer`: sets the serializer used by the codec, defaults to sessions.JsonSerializer
 
+## Sessions
+You may use whatever data structure you like for the session data.
+
+### Flash Messages
+To use flash messages, you can include the `Flash` type into your session data type.
+```go
+type SessionData struct {
+	sessions.Flash
+}
+```
+> The `Flash` type can also be used as the session value directly. This is useful when you want to use flash messages and are using multiple session types in a single request.
+
+The `Flash` type has the following methods:
+- `Add(key string, message string)`: adds a flash message to the session that is available until the next request
+- `Now(key string, message string)`: adds a flash message to the session that is available for the current request
+- `Keep(key string, message string)`: adds a flash message to the session that is available until it is read or removed
+- `Get(key string) string`: gets and removes a flash message from the session
+- `Remove(key string)`: removes a flash message from the session
+- `Clear()`: removes all flash messages from the session
+
+### Session Initialization
+Complex types are not going to be a problem.
+If your are using a type which need to be initialized, then you only need to add a `Init()` method to your type.
+
+```go
+type SessionData struct {
+	MapData map[string]string
+}
+
+func (s *SessionData) Init() {
+	s.MapData = make(map[string]string)
+}
+```
+
+Use the `Init()` method to initialize maps, types that use pointers, or any other type that needs to be initialized.
+
+The `Init()` method will be called when a new session is created and the session data is initialized.
+
 ## SessionManager
 ```go
 sessionManager := sessions.NewSessionManager[SessionData](cookieOptions, store, codec)
@@ -152,7 +197,6 @@ refreshManager := sessions.NewSessionManager[RefreshData](cookieOptions, store, 
 You can reuse the same `CookieOptions`, `Store`,
 and `Codec` for each `SessionManager` if you'd like, 
 but you can also configure them differently.
-
 
 ### CookieOptions
 ```go
