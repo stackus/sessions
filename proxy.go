@@ -8,14 +8,13 @@ import (
 )
 
 type SessionProxy struct {
-	ID         string
-	Values     any
-	IsNew      bool
-	req        *http.Request
-	resp       http.ResponseWriter
-	cookieName string
-	codecs     []Codec
-	options    *CookieOptions
+	ID      string
+	Values  any
+	IsNew   bool
+	req     *http.Request
+	resp    http.ResponseWriter
+	codecs  []Codec
+	options *CookieOptions
 }
 
 // Decode will decode the data into the dst value.
@@ -38,7 +37,7 @@ func (sp *SessionProxy) Decode(data []byte, dst any) error {
 
 	var errs []error
 	for _, codec := range sp.codecs {
-		err := codec.Decode(sp.cookieName, data, dst)
+		err := codec.Decode(sp.options.Name, data, dst)
 		if err == nil {
 			return nil
 		}
@@ -67,7 +66,7 @@ func (sp *SessionProxy) Encode(src any) ([]byte, error) {
 
 	var errs []error
 	for _, codec := range sp.codecs {
-		encoded, err := codec.Encode(sp.cookieName, src)
+		encoded, err := codec.Encode(sp.options.Name, src)
 		if err == nil {
 			return encoded, nil
 		}
@@ -86,7 +85,7 @@ func (sp *SessionProxy) Save(value string) error {
 	}
 
 	cookie := &http.Cookie{
-		Name:        sp.cookieName,
+		Name:        sp.options.Name,
 		Value:       value,
 		Path:        sp.options.Path,
 		Domain:      sp.options.Domain,
@@ -120,7 +119,7 @@ func (sp *SessionProxy) Delete() error {
 	}
 
 	cookie := &http.Cookie{
-		Name:        sp.cookieName,
+		Name:        sp.options.Name,
 		Value:       "",
 		Path:        sp.options.Path,
 		Domain:      sp.options.Domain,

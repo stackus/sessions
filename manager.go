@@ -5,7 +5,7 @@ import (
 )
 
 type SessionManager[T any] interface {
-	Get(r *http.Request, cookieName string) (*Session[T], error)
+	Get(r *http.Request) (*Session[T], error)
 	Save(w http.ResponseWriter, r *http.Request, session *Session[T]) error
 }
 
@@ -26,9 +26,9 @@ func NewSessionManager[T any](options CookieOptions, store Store, codecs ...Code
 // Get returns a session for the given request and cookie name.
 //
 // The returned session will inherit the options set in the manager.
-func (sm *sessionManager[T]) Get(r *http.Request, cookieName string) (*Session[T], error) {
+func (sm *sessionManager[T]) Get(r *http.Request) (*Session[T], error) {
 	reg := getRegistry(r)
-	if session := reg.get(cookieName); session != nil {
+	if session := reg.get(sm.options.Name); session != nil {
 		if s, ok := session.(*Session[T]); ok {
 			return s, nil
 		}
@@ -36,15 +36,18 @@ func (sm *sessionManager[T]) Get(r *http.Request, cookieName string) (*Session[T
 	}
 
 	proxy := &SessionProxy{
-		Values:     new(T),
-		req:        r,
-		cookieName: cookieName,
-		options:    &sm.options,
-		codecs:     sm.codecs,
+		Values:  new(T),
+		req:     r,
+		options: &sm.options,
+		codecs:  sm.codecs,
+	}
+
+	if initable, ok := proxy.Values.(interface{ Init() }); ok {
+		initable.Init()
 	}
 
 	var err error
-	if c, cErr := r.Cookie(cookieName); cErr == nil {
+	if c, cErr := r.Cookie(sm.options.Name); cErr == nil {
 		err = sm.store.Get(r.Context(), proxy, c.Value)
 	} else {
 		// start with IsNew = true; if the store needs or wants to set it to false, it may
@@ -62,29 +65,27 @@ func (sm *sessionManager[T]) Get(r *http.Request, cookieName string) (*Session[T
 	}
 
 	session := &Session[T]{
-		Values:     *values,
-		IsNew:      proxy.IsNew,
-		cookieName: cookieName,
-		storeKey:   proxy.ID,
-		manager:    sm,
-		options:    *proxy.options,
+		Values:   *values,
+		IsNew:    proxy.IsNew,
+		storeKey: proxy.ID,
+		manager:  sm,
+		options:  *proxy.options,
 	}
 
-	reg.set(cookieName, session)
+	reg.set(sm.options.Name, session)
 
 	return session, nil
 }
 
 func (sm *sessionManager[T]) Save(w http.ResponseWriter, r *http.Request, session *Session[T]) error {
 	proxy := &SessionProxy{
-		req:        r,
-		resp:       w,
-		cookieName: session.cookieName,
-		options:    &session.options,
-		codecs:     sm.codecs,
-		Values:     session.Values,
-		ID:         session.storeKey,
-		IsNew:      session.IsNew,
+		req:     r,
+		resp:    w,
+		options: &session.options,
+		codecs:  sm.codecs,
+		Values:  session.Values,
+		ID:      session.storeKey,
+		IsNew:   session.IsNew,
 	}
 
 	return sm.store.Save(r.Context(), proxy)

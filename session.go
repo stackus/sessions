@@ -5,12 +5,11 @@ import (
 )
 
 type Session[T any] struct {
-	Values     T
-	IsNew      bool
-	cookieName string
-	storeKey   string
-	options    CookieOptions
-	manager    SessionManager[T]
+	Values   T
+	IsNew    bool
+	storeKey string
+	options  CookieOptions
+	manager  SessionManager[T]
 }
 
 // Expire will set the MaxAge of the session to -1, effectively deleting the

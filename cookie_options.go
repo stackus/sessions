@@ -5,6 +5,7 @@ import (
 )
 
 type CookieOptions struct {
+	Name        string
 	Path        string
 	Domain      string
 	MaxAge      int
@@ -17,6 +18,7 @@ type CookieOptions struct {
 // NewCookieOptions returns a new CookieOptions with default values.
 //
 // The default values are:
+//   - Name: ""
 //   - Path: "/"
 //   - Domain: ""
 //   - MaxAge: 86400 * 30
@@ -26,6 +28,7 @@ type CookieOptions struct {
 //   - SameSite: http.SameSiteLaxMode
 func NewCookieOptions() CookieOptions {
 	return CookieOptions{
+		Name:        "",
 		Path:        DefaultPath,
 		Domain:      DefaultDomain,
 		MaxAge:      DefaultMaxAge,
