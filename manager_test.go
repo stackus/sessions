@@ -129,7 +129,9 @@ func TestSessionManager_Get(t *testing.T) {
 			codec := tc.codec()
 
 			manager := NewSessionManager[sessionData](
-				CookieOptions{},
+				CookieOptions{
+					Name: cookieName,
+				},
 				store,
 				codec,
 			)
@@ -140,7 +142,7 @@ func TestSessionManager_Get(t *testing.T) {
 			}
 
 			// Act
-			session, err := manager.Get(req, cookieName)
+			session, err := manager.Get(req)
 
 			// Assert
 			if tc.wantErr != nil {
@@ -178,6 +180,7 @@ func TestSessionManager_Save(t *testing.T) {
 	tests := map[string]testCase[sessionData]{
 		"save_session": {
 			options: CookieOptions{
+				Name:   "session",
 				MaxAge: 3600,
 			},
 			store: CookieStore{},
@@ -229,7 +232,7 @@ func TestSessionManager_Save(t *testing.T) {
 				tc.setupReq(req)
 			}
 
-			session, _ := manager.Get(req, "session")
+			session, _ := manager.Get(req)
 			if tc.setupSession != nil {
 				tc.setupSession(session)
 			}

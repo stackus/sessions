@@ -11,6 +11,149 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+type complexData struct {
+	Map       map[string]string
+	Pint      *int
+	AlwaysNil *string
+}
+
+func (s *complexData) Init() {
+	s.Map = make(map[string]string)
+	s.Pint = new(int)
+}
+
+func TestSessionInit(t *testing.T) {
+	type testCase struct {
+		options      CookieOptions
+		store        Store
+		codecs       []Codec
+		setupReq     func(r *http.Request)
+		setupSession func(s *Session[complexData])
+		wantCookies  []*http.Cookie
+		wantErr      error
+	}
+
+	tests := map[string]testCase{
+		"save_session": {
+			options: CookieOptions{
+				Name:   "session",
+				MaxAge: 3600,
+			},
+			store: CookieStore{},
+			codecs: []Codec{
+				&stubCodec{
+					encodeFn: func(name string, src any) ([]byte, error) {
+						b, err := json.Marshal(src)
+						if err != nil {
+							return nil, err
+						}
+						return []byte(base64.StdEncoding.EncodeToString(b)), nil
+					},
+					decodeFn: func(name string, data []byte, dst any) error {
+						b, err := base64.StdEncoding.DecodeString(string(data))
+						if err != nil {
+							return err
+						}
+						return json.Unmarshal(b, dst)
+					},
+				},
+			},
+			setupReq: func(r *http.Request) {
+				r.AddCookie(&http.Cookie{
+					Name:  "session",
+					Value: base64.StdEncoding.EncodeToString([]byte(`{"Map":{"key":"value"},"Pint":42}`)),
+				})
+			},
+			setupSession: func(s *Session[complexData]) {
+			},
+			wantCookies: []*http.Cookie{
+				{
+					Name:   "session",
+					Value:  base64.StdEncoding.EncodeToString([]byte(`{"Map":{"key":"value"},"Pint":42,"AlwaysNil":null}`)),
+					MaxAge: 3600,
+				},
+			},
+		},
+		"new_session": {
+			options: CookieOptions{
+				Name:   "session",
+				MaxAge: 3600,
+			},
+			store: CookieStore{},
+			codecs: []Codec{
+				&stubCodec{
+					encodeFn: func(name string, src any) ([]byte, error) {
+						b, err := json.Marshal(src)
+						if err != nil {
+							return nil, err
+						}
+						return []byte(base64.StdEncoding.EncodeToString(b)), nil
+					},
+					decodeFn: func(name string, data []byte, dst any) error {
+						b, err := base64.StdEncoding.DecodeString(string(data))
+						if err != nil {
+							return err
+						}
+						return json.Unmarshal(b, dst)
+					},
+				},
+			},
+			setupSession: func(s *Session[complexData]) {
+				s.Values.Map["key"] = "value"
+				*s.Values.Pint = 42
+			},
+			wantCookies: []*http.Cookie{
+				{
+					Name:   "session",
+					Value:  base64.StdEncoding.EncodeToString([]byte(`{"Map":{"key":"value"},"Pint":42,"AlwaysNil":null}`)),
+					MaxAge: 3600,
+				},
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Arrange
+			manager := NewSessionManager[complexData](
+				tc.options,
+				tc.store,
+				tc.codecs...,
+			)
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tc.setupReq != nil {
+				tc.setupReq(req)
+			}
+
+			session, _ := manager.Get(req)
+			if tc.setupSession != nil {
+				tc.setupSession(session)
+			}
+
+			resp := httptest.NewRecorder()
+
+			// Act
+			err := session.Save(resp, req)
+
+			// Assert
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, len(tc.wantCookies), len(resp.Result().Cookies()))
+				if len(tc.wantCookies) > 0 {
+					want := tc.wantCookies[0]
+					got := resp.Result().Cookies()[0]
+					assert.Equal(t, want.Name, got.Name)
+					assert.Equal(t, want.Value, got.Value)
+					assert.Equal(t, want.MaxAge, got.MaxAge)
+				}
+			}
+		})
+	}
+}
+
 func TestSession(t *testing.T) {
 	type sessionData struct {
 		Value string
@@ -29,6 +172,7 @@ func TestSession(t *testing.T) {
 	tests := map[string]testCase{
 		"save_session": {
 			options: CookieOptions{
+				Name:   "session",
 				MaxAge: 3600,
 			},
 			store: CookieStore{},
@@ -69,6 +213,7 @@ func TestSession(t *testing.T) {
 		},
 		"save_session_no_cookie": {
 			options: CookieOptions{
+				Name:   "session",
 				MaxAge: 3600,
 			},
 			store: CookieStore{},
@@ -103,6 +248,7 @@ func TestSession(t *testing.T) {
 		},
 		"save_session_error": {
 			options: CookieOptions{
+				Name:   "session",
 				MaxAge: 3600,
 			},
 			store: &stubStore{
@@ -141,6 +287,7 @@ func TestSession(t *testing.T) {
 		},
 		"expire_session": {
 			options: CookieOptions{
+				Name:   "session",
 				MaxAge: 3600,
 			},
 			store: CookieStore{},
@@ -181,6 +328,7 @@ func TestSession(t *testing.T) {
 		},
 		"remember_me": {
 			options: CookieOptions{
+				Name:   "session",
 				MaxAge: 0,
 			},
 			store: CookieStore{},
@@ -216,6 +364,7 @@ func TestSession(t *testing.T) {
 		},
 		"do_not_remember_me": {
 			options: CookieOptions{
+				Name:   "session",
 				MaxAge: 3600,
 			},
 			store: CookieStore{},
@@ -265,7 +414,7 @@ func TestSession(t *testing.T) {
 				tc.setupReq(req)
 			}
 
-			session, _ := manager.Get(req, "session")
+			session, _ := manager.Get(req)
 			if tc.setupSession != nil {
 				tc.setupSession(session)
 			}
@@ -311,6 +460,7 @@ func TestSession_Delete(t *testing.T) {
 	tests := map[string]testCase{
 		"delete_session": {
 			options: CookieOptions{
+				Name:   "session",
 				MaxAge: 3600,
 			},
 			store: CookieStore{},
@@ -351,6 +501,7 @@ func TestSession_Delete(t *testing.T) {
 		},
 		"delete_session_no_cookie": {
 			options: CookieOptions{
+				Name:   "session",
 				MaxAge: 3600,
 			},
 			store: CookieStore{},
@@ -398,7 +549,7 @@ func TestSession_Delete(t *testing.T) {
 				tc.setupReq(req)
 			}
 
-			session, _ := manager.Get(req, "session")
+			session, _ := manager.Get(req)
 			if tc.setupSession != nil {
 				tc.setupSession(session)
 			}

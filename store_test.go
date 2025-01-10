@@ -11,7 +11,6 @@ import (
 func TestCookieStore_Get(t *testing.T) {
 	type testCase struct {
 		setupProxy  func(proxy *SessionProxy)
-		cookieName  string
 		cookieValue string
 		wantValues  any
 		wantIsNew   bool
@@ -32,7 +31,6 @@ func TestCookieStore_Get(t *testing.T) {
 				proxy.options = &CookieOptions{}
 				proxy.Values = new(string)
 			},
-			cookieName:  "session",
 			cookieValue: "cookie_value",
 			wantValues:  func() *string { v := "cookie_value"; return &v }(),
 		},
@@ -41,8 +39,7 @@ func TestCookieStore_Get(t *testing.T) {
 				proxy.options = &CookieOptions{}
 				proxy.Values = new(string)
 			},
-			cookieName: "session",
-			wantErr:    ErrNoCodecs,
+			wantErr: ErrNoCodecs,
 		},
 		"invalid_codec": {
 			setupProxy: func(proxy *SessionProxy) {
@@ -56,7 +53,6 @@ func TestCookieStore_Get(t *testing.T) {
 				proxy.options = &CookieOptions{}
 				proxy.Values = new(string)
 			},
-			cookieName:  "session",
 			cookieValue: "cookie_value",
 			wantErr:     assert.AnError,
 		},
@@ -68,9 +64,8 @@ func TestCookieStore_Get(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			resp := httptest.NewRecorder()
 			proxy := &SessionProxy{
-				req:        req,
-				resp:       resp,
-				cookieName: tc.cookieName,
+				req:  req,
+				resp: resp,
 			}
 			if tc.setupProxy != nil {
 				tc.setupProxy(proxy)
@@ -95,7 +90,6 @@ func TestCookieStore_Get(t *testing.T) {
 func TestCookieStore_New(t *testing.T) {
 	type testCase struct {
 		setupProxy  func(proxy *SessionProxy)
-		cookieName  string
 		cookieValue string
 		wantValues  any
 		wantIsNew   bool
@@ -108,7 +102,6 @@ func TestCookieStore_New(t *testing.T) {
 				proxy.Values = new(string)
 				proxy.IsNew = true
 			},
-			cookieName: "session",
 			wantValues: func() *string { v := new(string); *v = ""; return v }(),
 			wantIsNew:  true,
 		},
@@ -120,9 +113,8 @@ func TestCookieStore_New(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			resp := httptest.NewRecorder()
 			proxy := &SessionProxy{
-				req:        req,
-				resp:       resp,
-				cookieName: tc.cookieName,
+				req:  req,
+				resp: resp,
 			}
 			if tc.setupProxy != nil {
 				tc.setupProxy(proxy)
@@ -147,7 +139,6 @@ func TestCookieStore_New(t *testing.T) {
 func TestCookieStore_Save(t *testing.T) {
 	type testCase struct {
 		setupProxy  func(proxy *SessionProxy)
-		cookieName  string
 		cookieValue string
 		wantCookies []*http.Cookie
 		wantErr     error
@@ -158,6 +149,7 @@ func TestCookieStore_Save(t *testing.T) {
 			setupProxy: func(proxy *SessionProxy) {
 				proxy.Values = func() *string { v := new(string); *v = "cookie_value"; return v }()
 				proxy.options = &CookieOptions{
+					Name:   "session",
 					MaxAge: 3600,
 				}
 				proxy.codecs = []Codec{
@@ -168,7 +160,6 @@ func TestCookieStore_Save(t *testing.T) {
 					},
 				}
 			},
-			cookieName: "session",
 			wantCookies: []*http.Cookie{
 				{
 					Name:   "session",
@@ -180,15 +171,17 @@ func TestCookieStore_Save(t *testing.T) {
 		"no_codecs": {
 			setupProxy: func(proxy *SessionProxy) {
 				proxy.Values = func() *string { v := new(string); *v = "cookie_value"; return v }()
-				proxy.options = &CookieOptions{}
+				proxy.options = &CookieOptions{
+					Name: "session",
+				}
 			},
-			cookieName: "session",
-			wantErr:    ErrNoCodecs,
+			wantErr: ErrNoCodecs,
 		},
 		"deleted_session": {
 			setupProxy: func(proxy *SessionProxy) {
 				proxy.Values = func() *string { v := new(string); *v = "cookie_value"; return v }()
 				proxy.options = &CookieOptions{
+					Name:   "session",
 					MaxAge: -1,
 				}
 				proxy.codecs = []Codec{
@@ -199,7 +192,6 @@ func TestCookieStore_Save(t *testing.T) {
 					},
 				}
 			},
-			cookieName: "session",
 			wantCookies: []*http.Cookie{
 				{
 					Name:   "session",
@@ -216,9 +208,8 @@ func TestCookieStore_Save(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			resp := httptest.NewRecorder()
 			proxy := &SessionProxy{
-				req:        req,
-				resp:       resp,
-				cookieName: tc.cookieName,
+				req:  req,
+				resp: resp,
 			}
 			if tc.setupProxy != nil {
 				tc.setupProxy(proxy)
@@ -250,7 +241,6 @@ func TestFileSystemStore_Get(t *testing.T) {
 	type testCase struct {
 		setupProxy func(proxy *SessionProxy)
 		setupFile  func(store *FileSystemStore, proxy *SessionProxy, id string) error
-		cookieName string
 		cookieID   string
 		maxLength  int
 		wantValues any
@@ -283,7 +273,6 @@ func TestFileSystemStore_Get(t *testing.T) {
 				}
 				return store.write(store.fileName(id), data)
 			},
-			cookieName: "session",
 			cookieID:   "cookie_id",
 			wantValues: &testValues{Value: "cookie_value"},
 		},
@@ -295,9 +284,8 @@ func TestFileSystemStore_Get(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			resp := httptest.NewRecorder()
 			proxy := &SessionProxy{
-				req:        req,
-				resp:       resp,
-				cookieName: tc.cookieName,
+				req:  req,
+				resp: resp,
 			}
 			if tc.setupProxy != nil {
 				tc.setupProxy(proxy)
@@ -327,7 +315,6 @@ func TestFileSystemStore_Get(t *testing.T) {
 func TestFileSystemStore_New(t *testing.T) {
 	type testCase struct {
 		setupProxy func(proxy *SessionProxy)
-		cookieName string
 		cookieID   string
 		maxLength  int
 		wantValues any
@@ -345,7 +332,6 @@ func TestFileSystemStore_New(t *testing.T) {
 				proxy.Values = new(testValues)
 				proxy.IsNew = true
 			},
-			cookieName: "session",
 			wantValues: &testValues{Value: ""},
 			wantIsNew:  true,
 		},
@@ -357,9 +343,8 @@ func TestFileSystemStore_New(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			resp := httptest.NewRecorder()
 			proxy := &SessionProxy{
-				req:        req,
-				resp:       resp,
-				cookieName: tc.cookieName,
+				req:  req,
+				resp: resp,
 			}
 			if tc.setupProxy != nil {
 				tc.setupProxy(proxy)
@@ -385,7 +370,6 @@ func TestFileSystemStore_Save(t *testing.T) {
 	type testCase struct {
 		setupProxy  func(proxy *SessionProxy)
 		setupFile   func(store *FileSystemStore, proxy *SessionProxy, id string) error
-		cookieName  string
 		cookieID    string
 		maxLength   int
 		wantCookies []*http.Cookie
@@ -404,6 +388,7 @@ func TestFileSystemStore_Save(t *testing.T) {
 				proxy.ID = "cookie_id"
 				proxy.Values = &testValues{Value: "cookie_value"}
 				proxy.options = &CookieOptions{
+					Name:   "session",
 					MaxAge: 3600,
 				}
 				proxy.codecs = []Codec{
@@ -419,8 +404,7 @@ func TestFileSystemStore_Save(t *testing.T) {
 				}
 				return store.write(store.fileName(id), data)
 			},
-			cookieName: "session",
-			cookieID:   "cookie_id",
+			cookieID: "cookie_id",
 			wantCookies: []*http.Cookie{
 				{
 					Name:   "session",
@@ -433,14 +417,14 @@ func TestFileSystemStore_Save(t *testing.T) {
 			setupProxy: func(proxy *SessionProxy) {
 				proxy.Values = &testValues{Value: "cookie_value"}
 				proxy.options = &CookieOptions{
+					Name:   "session",
 					MaxAge: 3600,
 				}
 				proxy.codecs = []Codec{
 					NewCodec(codecKey),
 				}
 			},
-			cookieName: "session",
-			cookieID:   "cookie_id",
+			cookieID: "cookie_id",
 			wantCookies: []*http.Cookie{
 				{
 					Name:   "session",
@@ -454,14 +438,14 @@ func TestFileSystemStore_Save(t *testing.T) {
 				proxy.ID = "cookie_id"
 				proxy.Values = &testValues{Value: "cookie_value"}
 				proxy.options = &CookieOptions{
+					Name:   "session",
 					MaxAge: -1,
 				}
 				proxy.codecs = []Codec{
 					NewCodec(codecKey),
 				}
 			},
-			cookieName: "session",
-			cookieID:   "cookie_id",
+			cookieID: "cookie_id",
 			wantCookies: []*http.Cookie{
 				{
 					Name:   "session",
@@ -479,9 +463,8 @@ func TestFileSystemStore_Save(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			resp := httptest.NewRecorder()
 			proxy := &SessionProxy{
-				req:        req,
-				resp:       resp,
-				cookieName: tc.cookieName,
+				req:  req,
+				resp: resp,
 			}
 			if tc.setupProxy != nil {
 				tc.setupProxy(proxy)
