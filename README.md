@@ -266,6 +266,10 @@ in the response writer.
 This will write the session data to the `Store` and set the session cookie in the response
 even if the session data has not changed.
 
+#### New or Changed Sessions Only
+If the session nor its options have changed from the values seen when it was loaded,
+then the session will not be passed into the store to be saved.
+
 ### Deleting a Session
 ```go
 err = session.Delete(w, r) // cookie will be set to expire immediately
@@ -298,6 +302,9 @@ err = sessions.Save(w, r)
 The `Save` function will save all sessions in the request context.
 This is useful when you have multiple sessions in a single request.
 All sessions will be saved even if the session data has not changed.
+
+It is safe to include a call to this function at the end of your handlers or middleware to always save the new and changed sessions.
+Any session that has not changed (or its cookie options) will not be saved in a store and will not add a "Set-Cookie" header to the response.
 
 ## Information for Store Implementors
 Implementing a new `Store` is relatively simple.

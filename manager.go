@@ -64,11 +64,22 @@ func (sm *sessionManager[T]) Get(r *http.Request) (*Session[T], error) {
 		return nil, ErrInvalidSessionType
 	}
 
+	sHash := &sessionHash[T]{
+		Data:    *values,
+		Options: *proxy.options,
+	}
+
+	hash, err := sHash.Hash()
+	if err != nil {
+		return nil, err
+	}
+
 	session := &Session[T]{
 		Values:   *values,
 		IsNew:    proxy.IsNew,
 		storeKey: proxy.ID,
 		manager:  sm,
+		hash:     hash,
 		options:  *proxy.options,
 	}
 
@@ -78,6 +89,20 @@ func (sm *sessionManager[T]) Get(r *http.Request) (*Session[T], error) {
 }
 
 func (sm *sessionManager[T]) Save(w http.ResponseWriter, r *http.Request, session *Session[T]) error {
+	if !session.IsNew {
+		// create and compare the hash
+		sHash := &sessionHash[T]{
+			Data:    session.Values,
+			Options: session.options,
+		}
+
+		if equal, err := sHash.Compare(session.hash); err != nil {
+			return err
+		} else if equal {
+			return nil
+		}
+	}
+
 	proxy := &SessionProxy{
 		req:     r,
 		resp:    w,

@@ -9,6 +9,7 @@ type Session[T any] struct {
 	IsNew    bool
 	storeKey string
 	options  CookieOptions
+	hash     []byte
 	manager  SessionManager[T]
 }
 

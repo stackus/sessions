@@ -178,7 +178,7 @@ func TestSessionManager_Save(t *testing.T) {
 	}
 
 	tests := map[string]testCase[sessionData]{
-		"save_session": {
+		"changed_session": {
 			options: CookieOptions{
 				Name:   "session",
 				MaxAge: 3600,
@@ -208,13 +208,89 @@ func TestSessionManager_Save(t *testing.T) {
 					Value: base64.StdEncoding.EncodeToString([]byte(`{"Value":"session-value"}`)),
 				})
 			},
+			setupSession: func(s *Session[sessionData]) {
+				s.Values.Value = "new-session-value"
+			},
+			wantCookies: []*http.Cookie{
+				{
+					Name:   "session",
+					Value:  base64.StdEncoding.EncodeToString([]byte(`{"Value":"new-session-value"}`)),
+					MaxAge: 3600,
+				},
+			},
+		},
+		"new_age_session": {
+			options: CookieOptions{
+				Name:   "session",
+				MaxAge: 3600,
+			},
+			store: CookieStore{},
+			codecs: []Codec{
+				&stubCodec{
+					encodeFn: func(name string, src any) ([]byte, error) {
+						b, err := json.Marshal(src)
+						if err != nil {
+							return nil, err
+						}
+						return []byte(base64.StdEncoding.EncodeToString(b)), nil
+					},
+					decodeFn: func(name string, data []byte, dst any) error {
+						b, err := base64.StdEncoding.DecodeString(string(data))
+						if err != nil {
+							return err
+						}
+						return json.Unmarshal(b, dst)
+					},
+				},
+			},
+			setupReq: func(r *http.Request) {
+				r.AddCookie(&http.Cookie{
+					Name:  "session",
+					Value: base64.StdEncoding.EncodeToString([]byte(`{"Value":"session-value"}`)),
+				})
+			},
+			setupSession: func(s *Session[sessionData]) {
+				s.Persist(7200)
+			},
 			wantCookies: []*http.Cookie{
 				{
 					Name:   "session",
 					Value:  base64.StdEncoding.EncodeToString([]byte(`{"Value":"session-value"}`)),
-					MaxAge: 3600,
+					MaxAge: 7200,
 				},
 			},
+		},
+		"same_session": {
+			options: CookieOptions{
+				Name:   "session",
+				MaxAge: 3600,
+			},
+			store: CookieStore{},
+			codecs: []Codec{
+				&stubCodec{
+					encodeFn: func(name string, src any) ([]byte, error) {
+						b, err := json.Marshal(src)
+						if err != nil {
+							return nil, err
+						}
+						return []byte(base64.StdEncoding.EncodeToString(b)), nil
+					},
+					decodeFn: func(name string, data []byte, dst any) error {
+						b, err := base64.StdEncoding.DecodeString(string(data))
+						if err != nil {
+							return err
+						}
+						return json.Unmarshal(b, dst)
+					},
+				},
+			},
+			setupReq: func(r *http.Request) {
+				r.AddCookie(&http.Cookie{
+					Name:  "session",
+					Value: base64.StdEncoding.EncodeToString([]byte(`{"Value":"session-value"}`)),
+				})
+			},
+			wantCookies: []*http.Cookie{},
 		},
 	}
 

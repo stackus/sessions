@@ -65,11 +65,12 @@ func TestSessionInit(t *testing.T) {
 				})
 			},
 			setupSession: func(s *Session[complexData]) {
+				s.Values.Map["key"] = "new-value"
 			},
 			wantCookies: []*http.Cookie{
 				{
 					Name:   "session",
-					Value:  base64.StdEncoding.EncodeToString([]byte(`{"Map":{"key":"value"},"Pint":42,"AlwaysNil":null}`)),
+					Value:  base64.StdEncoding.EncodeToString([]byte(`{"Map":{"key":"new-value"},"Pint":42,"AlwaysNil":null}`)),
 					MaxAge: 3600,
 				},
 			},
@@ -283,6 +284,10 @@ func TestSession(t *testing.T) {
 					Value: base64.StdEncoding.EncodeToString([]byte(`{"Value":"session-value"}`)),
 				})
 			},
+			setupSession: func(s *Session[sessionData]) {
+				// add a change so that the session makes it to the store so it has a chance to error
+				s.Values.Value = "new-value"
+			},
 			wantErr: assert.AnError,
 		},
 		"expire_session": {
@@ -429,7 +434,9 @@ func TestSession(t *testing.T) {
 				assert.ErrorIs(t, err, tc.wantErr)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, len(tc.wantCookies), len(resp.Result().Cookies()))
+				if !assert.Equal(t, len(tc.wantCookies), len(resp.Result().Cookies())) {
+					return
+				}
 				if len(tc.wantCookies) > 0 {
 					want := tc.wantCookies[0]
 					got := resp.Result().Cookies()[0]
