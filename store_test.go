@@ -32,7 +32,7 @@ func TestCookieStore_Get(t *testing.T) {
 				proxy.Values = new(string)
 			},
 			cookieValue: "cookie_value",
-			wantValues:  func() *string { v := "cookie_value"; return &v }(),
+			wantValues:  func() *string { ; return new("cookie_value") }(),
 		},
 		"no_codecs": {
 			setupProxy: func(proxy *SessionProxy) {
