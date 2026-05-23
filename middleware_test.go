@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSaveMiddleware(t *testing.T) {
+func TestSaveSessions(t *testing.T) {
 	type testCase struct {
 		setupInner func(mgr SessionManager[string]) http.HandlerFunc
 		cookieName string
@@ -55,7 +55,7 @@ func TestSaveMiddleware(t *testing.T) {
 				CookieStore{},
 				[]Codec{codec},
 			)
-			handler := SaveMiddleware(tc.setupInner(mgr))
+			handler := SaveSessions(tc.setupInner(mgr))
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodGet, "/", nil)
 
