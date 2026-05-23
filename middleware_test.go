@@ -37,6 +37,18 @@ func TestSaveSessions(t *testing.T) {
 			},
 			wantCookie: false,
 		},
+		"cookie_set_when_handler_writes_body_before_save": {
+			cookieName: "test_session",
+			setupInner: func(mgr SessionManager[string]) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) {
+					session, err := mgr.Get(r)
+					assert.NoError(t, err)
+					session.Values = "hello"
+					_, _ = w.Write([]byte("response body")) // triggers implicit WriteHeader(200) before middleware saves
+				}
+			},
+			wantCookie: true,
+		},
 	}
 
 	for name, tc := range tests {
