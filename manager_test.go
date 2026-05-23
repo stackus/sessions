@@ -20,12 +20,13 @@ func TestSessionManager_Get(t *testing.T) {
 	cookieName := "session"
 
 	type testCase[T any] struct {
-		store      func() *mockStore
-		codec      func() *mockCodec
-		setupReq   func(r *http.Request)
-		wantValues T
-		wantIsNew  bool
-		wantErr    error
+		store       func() *mockStore
+		codec       func() *mockCodec
+		setupReq    func(r *http.Request)
+		managerOpts []ManagerOption
+		wantValues  T
+		wantIsNew   bool
+		wantErr     error
 	}
 	tests := map[string]testCase[sessionData]{
 		"new_session": {
@@ -129,11 +130,10 @@ func TestSessionManager_Get(t *testing.T) {
 			codec := tc.codec()
 
 			manager := NewSessionManager[sessionData](
-				CookieOptions{
-					Name: cookieName,
-				},
+				NewCookieOptions(cookieName),
 				store,
-				codec,
+				[]Codec{codec},
+				tc.managerOpts...,
 			)
 
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -300,7 +300,7 @@ func TestSessionManager_Save(t *testing.T) {
 			manager := NewSessionManager[sessionData](
 				tc.options,
 				tc.store,
-				tc.codecs...,
+				tc.codecs,
 			)
 
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -332,6 +332,104 @@ func TestSessionManager_Save(t *testing.T) {
 					assert.Equal(t, want.MaxAge, got.MaxAge)
 				}
 			}
+		})
+	}
+}
+
+func TestSessionManager_Get_GracefulDecodeFailure(t *testing.T) {
+	type sessionData struct {
+		UserID int
+	}
+
+	cookieName := "session"
+
+	type testCase struct {
+		store       func() *mockStore
+		codec       func() *mockCodec
+		setupReq    func(r *http.Request)
+		cookieName  string
+		managerOpts []ManagerOption
+		wantIsNew   bool
+		wantErr     error
+	}
+
+	tests := map[string]testCase{
+		"bad_cookie_produces_new_session_with_graceful_option": {
+			store: func() *mockStore {
+				store := &mockStore{}
+				store.
+					On("Get", mock.Anything, mock.AnythingOfType("*sessions.SessionProxy"), "corrupt_value").
+					Return(assert.AnError)
+				store.
+					On("New", mock.Anything, mock.AnythingOfType("*sessions.SessionProxy")).
+					Run(func(args mock.Arguments) {
+						proxy := args.Get(1).(*SessionProxy)
+						proxy.IsNew = true
+					}).
+					Return(nil)
+				return store
+			},
+			codec: func() *mockCodec { return &mockCodec{} },
+			setupReq: func(r *http.Request) {
+				r.AddCookie(&http.Cookie{Name: cookieName, Value: "corrupt_value"})
+			},
+			cookieName:  cookieName,
+			managerOpts: []ManagerOption{WithGracefulDecodeFailure()},
+			wantIsNew:   true,
+			wantErr:     nil,
+		},
+		"bad_cookie_without_graceful_option_returns_error": {
+			store: func() *mockStore {
+				store := &mockStore{}
+				store.
+					On("Get", mock.Anything, mock.AnythingOfType("*sessions.SessionProxy"), "corrupt_value").
+					Return(assert.AnError)
+				return store
+			},
+			codec: func() *mockCodec { return &mockCodec{} },
+			setupReq: func(r *http.Request) {
+				r.AddCookie(&http.Cookie{Name: cookieName, Value: "corrupt_value"})
+			},
+			cookieName:  cookieName,
+			managerOpts: nil,
+			wantIsNew:   false,
+			wantErr:     assert.AnError,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Arrange
+			store := tc.store()
+			codec := tc.codec()
+
+			manager := NewSessionManager[sessionData](
+				NewCookieOptions(tc.cookieName),
+				store,
+				[]Codec{codec},
+				tc.managerOpts...,
+			)
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tc.setupReq != nil {
+				tc.setupReq(req)
+			}
+
+			// Act
+			session, err := manager.Get(req)
+
+			// Assert
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+				assert.Nil(t, session)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, session)
+				assert.Equal(t, tc.wantIsNew, session.IsNew)
+			}
+
+			store.AssertExpectations(t)
+			codec.AssertExpectations(t)
 		})
 	}
 }

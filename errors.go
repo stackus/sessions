@@ -19,4 +19,5 @@ var (
 	ErrNoCodecs             = errors.ErrInternalServerError.Msg("no codecs were provided")
 	ErrNoResponseWriter     = errors.ErrInternalServerError.Msg("no response writer was provided")
 	ErrInvalidSessionType   = errors.ErrBadRequest.Msg("the session type is incorrect")
+	ErrSessionNotFound      = errors.ErrNotFound.Msg("no session found in context for the given name")
 )

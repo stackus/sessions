@@ -13,13 +13,23 @@ type sessionManager[T any] struct {
 	options CookieOptions
 	store   Store
 	codecs  []Codec
+	cfg     managerConfig
 }
 
-func NewSessionManager[T any](options CookieOptions, store Store, codecs ...Codec) SessionManager[T] {
+// NewSessionManager creates a SessionManager for session values of type T.
+//
+// codecs are tried in order for encode/decode — list new keys before old keys
+// to support key rotation. opts configure manager behavior.
+func NewSessionManager[T any](options CookieOptions, store Store, codecs []Codec, opts ...ManagerOption) SessionManager[T] {
+	cfg := managerConfig{}
+	for _, o := range opts {
+		o.configureManager(&cfg)
+	}
 	return &sessionManager[T]{
 		options: options,
 		store:   store,
 		codecs:  codecs,
+		cfg:     cfg,
 	}
 }
 
@@ -49,6 +59,11 @@ func (sm *sessionManager[T]) Get(r *http.Request) (*Session[T], error) {
 	var err error
 	if c, cErr := r.Cookie(sm.options.Name); cErr == nil {
 		err = sm.store.Get(r.Context(), proxy, c.Value)
+		if err != nil && sm.cfg.gracefulDecodeFailure {
+			proxy.Values = new(T)
+			proxy.IsNew = false
+			err = sm.store.New(r.Context(), proxy)
+		}
 	} else {
 		// start with IsNew = true; if the store needs or wants to set it to false, it may
 		proxy.IsNew = true
@@ -80,11 +95,10 @@ func (sm *sessionManager[T]) Get(r *http.Request) (*Session[T], error) {
 		storeKey: proxy.ID,
 		manager:  sm,
 		hash:     hash,
-		options:  *proxy.options,
+		options:  sm.options,
 	}
 
 	reg.set(sm.options.Name, session)
-
 	return session, nil
 }
 
@@ -112,6 +126,5 @@ func (sm *sessionManager[T]) Save(w http.ResponseWriter, r *http.Request, sessio
 		ID:      session.storeKey,
 		IsNew:   session.IsNew,
 	}
-
 	return sm.store.Save(r.Context(), proxy)
 }

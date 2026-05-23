@@ -119,7 +119,7 @@ func TestSessionInit(t *testing.T) {
 			manager := NewSessionManager[complexData](
 				tc.options,
 				tc.store,
-				tc.codecs...,
+				tc.codecs,
 			)
 
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -411,7 +411,7 @@ func TestSession(t *testing.T) {
 			manager := NewSessionManager[sessionData](
 				tc.options,
 				tc.store,
-				tc.codecs...,
+				tc.codecs,
 			)
 
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -548,7 +548,7 @@ func TestSession_Delete(t *testing.T) {
 			manager := NewSessionManager[sessionData](
 				tc.options,
 				tc.store,
-				tc.codecs...,
+				tc.codecs,
 			)
 
 			req := httptest.NewRequest(http.MethodGet, "/", nil)

@@ -37,7 +37,8 @@ func (s *Session[T]) Persist(maxAge int) {
 	s.options.MaxAge = maxAge
 }
 
-// Save will initiate the saving of the session to the store and the response.
+// Save will initiate the saving of the session.
+// Culminating in the session being written to the response header "Set-Cookie".
 func (s *Session[T]) Save(w http.ResponseWriter, r *http.Request) error {
 	return s.manager.Save(w, r, s)
 }

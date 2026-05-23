@@ -26,9 +26,9 @@ type CookieOptions struct {
 //   - HttpOnly: true
 //   - Partitioned: false
 //   - SameSite: http.SameSiteLaxMode
-func NewCookieOptions() CookieOptions {
+func NewCookieOptions(name string) CookieOptions {
 	return CookieOptions{
-		Name:        "",
+		Name:        name,
 		Path:        DefaultPath,
 		Domain:      DefaultDomain,
 		MaxAge:      DefaultMaxAge,
