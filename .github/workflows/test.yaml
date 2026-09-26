@@ -17,17 +17,17 @@ jobs:
   unit:
     strategy:
       matrix:
-        go: ['1.26']
         os: [ubuntu-latest, macos-latest, windows-latest]
       fail-fast: true
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
-      - name: Setup Go ${{ matrix.go }}
+      - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go }}
+          # go.mod requires 1.26.8 (github.com/stackus/errors v0.2.0).
+          go-version-file: go.mod
           cache: true
       - name: Run Tests
         run: go test -race -cover -coverprofile=coverage -covermode=atomic -v ./...

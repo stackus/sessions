@@ -2,145 +2,55 @@ package sessions
 
 import (
 	"context"
-	crand "crypto/rand"
-	"encoding/base32"
-	"io"
-	"os"
-	"path/filepath"
-	"sync"
+	"time"
 )
 
+// StoreParams carries the manager's settings for one store call. It is a
+// struct so that fields can be added without changing the Store interface.
+type StoreParams struct {
+	// ExpiresAt is the absolute expiry of the record being written. It is zero
+	// on Load, before the record has been decoded. A store may use it to expire
+	// or clean up records, or to exclude expired ones from lookups; the manager
+	// enforces expiry from the authenticated record either way.
+	ExpiresAt time.Time
+	// MaxRecordSize is the largest record, in bytes, the manager writes or
+	// accepts. The manager checks it on every write; a store uses it to bound
+	// what it reads.
+	MaxRecordSize int
+}
+
+// Store persists encoded session records and locates them by credential.
+//
+// A Store receives each record as opaque bytes that have already been
+// serialized and encoded by the manager. It never parses session values,
+// cryptography, timestamps, or HTTP.
+//
+// Contracts:
+//   - Create stores a new record and returns a new credential for it.
+//   - Every Create and Update receives the record's expiry in StoreParams.
+//     Update receives a later expiry when the session was extended.
+//   - Update replaces an existing record and returns its current credential,
+//     or a replacement credential if the store changes it on every write. It
+//     must not create a missing record.
+//   - Load returns the record for a credential, or an error matching
+//     ErrSessionNotFound when there is no such record.
+//   - Delete removes a record and is idempotent: deleting a record that does
+//     not exist succeeds.
+//   - A credential the store cannot interpret makes Load and Update return an
+//     error matching ErrInvalidSession, and makes Delete return
+//     ErrInvalidSession, ErrSessionNotFound, or nil. In no case is any record
+//     touched.
+//   - Operational failures (I/O, unavailable backends) are returned with a
+//     built-in category such as errors.ErrInternal or errors.ErrUnavailable,
+//     never with ErrInvalidSession or ErrSessionNotFound, so that they are not
+//     mistaken for a missing or rejected session.
+//
+// Security: a store that hands the record itself to the client, as CookieStore
+// does, must be paired with an encoder that authenticates it, such as
+// HMACEncoder or AESGCMEncoder. The manager does not enforce this.
 type Store interface {
-	Get(ctx context.Context, proxy *SessionProxy, cookieValue string) error
-	New(ctx context.Context, proxy *SessionProxy) error
-	Save(ctx context.Context, proxy *SessionProxy) error
-}
-
-type CookieStore struct{}
-
-var _ Store = (*CookieStore)(nil)
-
-func NewCookieStore() *CookieStore {
-	return &CookieStore{}
-}
-
-func (cs CookieStore) Get(_ context.Context, proxy *SessionProxy, cookieValue string) error {
-	return proxy.Decode([]byte(cookieValue), proxy.Values)
-}
-
-func (cs CookieStore) New(_ context.Context, _ *SessionProxy) error {
-	// nothing to do
-	return nil
-}
-
-func (cs CookieStore) Save(_ context.Context, proxy *SessionProxy) error {
-	value, err := proxy.Encode(proxy.Values)
-	if err != nil {
-		return err
-	}
-
-	return proxy.Save(string(value))
-}
-
-type FileSystemStore struct {
-	root        string
-	maxFileSize int
-}
-
-var _ Store = (*FileSystemStore)(nil)
-
-const sessionFilePrefix = "session_"
-
-var fsMutex = &sync.Mutex{}
-
-func NewFileSystemStore(root string, maxFileSize int) *FileSystemStore {
-	return &FileSystemStore{
-		root:        root,
-		maxFileSize: maxFileSize,
-	}
-}
-
-func (fs FileSystemStore) Get(_ context.Context, proxy *SessionProxy, cookieValue string) error {
-	if err := proxy.Decode([]byte(cookieValue), &proxy.ID); err != nil {
-		return err
-	}
-
-	data, err := fs.read(fs.fileName(proxy.ID))
-	if err != nil {
-		return err
-	}
-
-	return proxy.Decode(data, proxy.Values)
-}
-
-func (fs FileSystemStore) New(_ context.Context, _ *SessionProxy) error {
-	// nothing to do
-	return nil
-}
-
-func (fs FileSystemStore) Save(_ context.Context, proxy *SessionProxy) error {
-	if proxy.MaxAge() <= 0 {
-		if err := fs.delete(fs.fileName(proxy.ID)); err != nil {
-			return err
-		}
-		return proxy.Delete()
-	}
-
-	if proxy.ID == "" {
-		proxy.ID = randomID(32)
-	}
-
-	value, err := proxy.Encode(proxy.Values)
-	if err != nil {
-		return err
-	}
-	if err := fs.write(fs.fileName(proxy.ID), value); err != nil {
-		return err
-	}
-
-	id, err := proxy.Encode(proxy.ID)
-	if err != nil {
-		return err
-	}
-
-	return proxy.Save(string(id))
-}
-
-func (fs FileSystemStore) fileName(id string) string {
-	return filepath.Clean(filepath.Join(fs.root, sessionFilePrefix+id))
-}
-
-func (fs FileSystemStore) read(fileName string) ([]byte, error) {
-	fsMutex.Lock()
-	defer fsMutex.Unlock()
-	return os.ReadFile(fileName)
-}
-
-func (fs FileSystemStore) write(fileName string, data []byte) error {
-	// check data length against maxFileSize
-	if fs.maxFileSize > 0 && len(data) > fs.maxFileSize {
-		return ErrEncodedLengthTooLong
-	}
-	fsMutex.Lock()
-	defer fsMutex.Unlock()
-	return os.WriteFile(fileName, data, 0600)
-}
-
-func (fs FileSystemStore) delete(fileName string) error {
-	fsMutex.Lock()
-	defer fsMutex.Unlock()
-	if err := os.Remove(fileName); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
-var base32RawStdEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
-
-func randomID(length int) string {
-	k := make([]byte, length)
-	if _, err := io.ReadFull(crand.Reader, k); err != nil {
-		return ""
-	}
-	return base32RawStdEncoding.EncodeToString(k)
+	Load(ctx context.Context, credential string, params StoreParams) ([]byte, error)
+	Create(ctx context.Context, data []byte, params StoreParams) (credential string, err error)
+	Update(ctx context.Context, credential string, data []byte, params StoreParams) (newCredential string, err error)
+	Delete(ctx context.Context, credential string) error
 }

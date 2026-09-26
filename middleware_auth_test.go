@@ -1,196 +1,186 @@
 package sessions
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/stackus/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-type stubSessionManager[T any] struct {
-	session *Session[T]
-	err     error
+// helperOutcome reports which handler a helper ran.
+type helperOutcome string
+
+const (
+	ranNext      helperOutcome = "next"
+	ranOnFailure helperOutcome = "onFailure"
+	ranNeither   helperOutcome = "neither"
+)
+
+// runHelper sends r through helper (wrapped in the manager's middleware unless
+// withoutScope) and reports which handler ran.
+func runHelper(h *testHarness, helper func(http.Handler) http.Handler, r *http.Request, withoutScope bool) (helperOutcome, *httptest.ResponseRecorder) {
+	outcome := ranNeither
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { outcome = ranNext })
+	handler := helper(next)
+	if !withoutScope {
+		handler = h.manager.Middleware()(handler)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, r)
+	return outcome, rec
 }
 
-func (s *stubSessionManager[T]) Get(r *http.Request) (*Session[T], error) {
-	return s.session, s.err
-}
-
-func (s *stubSessionManager[T]) Save(w http.ResponseWriter, r *http.Request, session *Session[T]) error {
-	return nil
-}
-
-func newSession[T any](isNew bool) *Session[T] {
-	return &Session[T]{IsNew: isNew}
-}
-
-func TestRequireSession(t *testing.T) {
-	type testCase struct {
-		mgr      func() SessionManager[string]
-		wantNext bool
+func TestAuthHelpers(t *testing.T) {
+	type scenario struct {
+		request      func(t *testing.T, h *testHarness) *http.Request
+		withoutScope bool
+		storeFails   bool
+	}
+	scenarios := map[string]scenario{
+		"no credential": {request: func(t *testing.T, h *testHarness) *http.Request { return cookieRequest() }},
+		"invalid credential": {request: func(t *testing.T, h *testHarness) *http.Request {
+			return cookieRequest("garbage")
+		}},
+		"expired session": {request: func(t *testing.T, h *testHarness) *http.Request {
+			return cookieRequest(h.issueWith(t, h.encoder.Encoder, testSession{UserID: 1}, envelopeMeta{
+				CreatedAt: loadTestNow.Add(-2 * time.Hour), ExpiresAt: loadTestNow.Add(-time.Hour),
+			}))
+		}},
+		"missing record": {request: func(t *testing.T, h *testHarness) *http.Request {
+			credential := h.issue(t, testSession{UserID: 1})
+			require.NoError(t, h.store.Store.Delete(t.Context(), credential))
+			return cookieRequest(credential)
+		}},
+		"valid session": {request: func(t *testing.T, h *testHarness) *http.Request {
+			return cookieRequest(h.issue(t, testSession{UserID: 1}))
+		}},
+		"valid session, check fails": {request: func(t *testing.T, h *testHarness) *http.Request {
+			return cookieRequest(h.issue(t, testSession{UserID: 2}))
+		}},
+		"store failure": {
+			request: func(t *testing.T, h *testHarness) *http.Request {
+				return cookieRequest(h.issue(t, testSession{UserID: 1}))
+			},
+			storeFails: true,
+		},
+		"missing middleware": {
+			request: func(t *testing.T, h *testHarness) *http.Request {
+				return cookieRequest(h.issue(t, testSession{UserID: 1}))
+			},
+			withoutScope: true,
+		},
 	}
 
-	tests := map[string]testCase{
-		"valid_session_calls_next": {
-			mgr: func() SessionManager[string] {
-				return &stubSessionManager[string]{session: newSession[string](false)}
-			},
-			wantNext: true,
-		},
-		"new_session_calls_failure": {
-			mgr: func() SessionManager[string] {
-				return &stubSessionManager[string]{session: newSession[string](true)}
-			},
-			wantNext: false,
-		},
-		"get_error_calls_failure": {
-			mgr: func() SessionManager[string] {
-				return &stubSessionManager[string]{err: errors.New("decode error")}
-			},
-			wantNext: false,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			// Arrange
-			var nextCalled, failureCalled bool
-			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
-			onFailure := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { failureCalled = true })
-			handler := RequireSession(tc.mgr(), onFailure)(next)
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodGet, "/", nil)
-
-			// Act
-			handler.ServeHTTP(w, r)
-
-			// Assert
-			assert.Equal(t, tc.wantNext, nextCalled)
-			assert.Equal(t, !tc.wantNext, failureCalled)
+	onFailureRan := func(outcome *helperOutcome) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*outcome = ranOnFailure
+			w.WriteHeader(http.StatusSeeOther)
 		})
 	}
-}
+	isUserOne := func(sess *Session[testSession]) bool { return sess.Values().UserID == 1 }
 
-func TestRequireSessionState(t *testing.T) {
-	type testCase struct {
-		mgr        func() SessionManager[string]
-		check      func(*Session[string]) bool
-		wantNext   bool
-		checkCalls int
-	}
-
-	tests := map[string]testCase{
-		"valid_session_check_passes_calls_next": {
-			mgr: func() SessionManager[string] {
-				return &stubSessionManager[string]{session: newSession[string](false)}
+	helpers := map[string]struct {
+		build func(m *Manager[testSession], onFailure http.Handler) func(http.Handler) http.Handler
+		want  map[string]helperOutcome
+	}{
+		"RequireSession": {
+			build: func(m *Manager[testSession], onFailure http.Handler) func(http.Handler) http.Handler {
+				return RequireSession(m, onFailure)
 			},
-			check:      func(*Session[string]) bool { return true },
-			wantNext:   true,
-			checkCalls: 1,
+			want: map[string]helperOutcome{
+				"no credential": ranOnFailure, "invalid credential": ranOnFailure, "expired session": ranOnFailure,
+				"missing record": ranOnFailure, "valid session": ranNext, "valid session, check fails": ranNext,
+				"store failure": ranNeither, "missing middleware": ranNeither,
+			},
 		},
-		"valid_session_check_fails_calls_failure": {
-			mgr: func() SessionManager[string] {
-				return &stubSessionManager[string]{session: newSession[string](false)}
+		"RequireSessionState": {
+			build: func(m *Manager[testSession], onFailure http.Handler) func(http.Handler) http.Handler {
+				return RequireSessionState(m, isUserOne, onFailure)
 			},
-			check:      func(*Session[string]) bool { return false },
-			wantNext:   false,
-			checkCalls: 1,
+			want: map[string]helperOutcome{
+				"no credential": ranOnFailure, "invalid credential": ranOnFailure, "expired session": ranOnFailure,
+				"missing record": ranOnFailure, "valid session": ranNext, "valid session, check fails": ranOnFailure,
+				"store failure": ranNeither, "missing middleware": ranNeither,
+			},
 		},
-		"new_session_calls_failure_without_check": {
-			mgr: func() SessionManager[string] {
-				return &stubSessionManager[string]{session: newSession[string](true)}
+		"GuestOnly": {
+			build: func(m *Manager[testSession], onFailure http.Handler) func(http.Handler) http.Handler {
+				return GuestOnly(m, onFailure)
 			},
-			check: func(*Session[string]) bool {
-				// should never be called for new sessions
-				return true
+			want: map[string]helperOutcome{
+				"no credential": ranNext, "invalid credential": ranNext, "expired session": ranNext,
+				"missing record": ranNext, "valid session": ranOnFailure, "valid session, check fails": ranOnFailure,
+				"store failure": ranNeither, "missing middleware": ranNeither,
 			},
-			wantNext:   false,
-			checkCalls: 0,
-		},
-		"get_error_calls_failure_without_check": {
-			mgr: func() SessionManager[string] {
-				return &stubSessionManager[string]{err: errors.New("decode error")}
-			},
-			check: func(*Session[string]) bool {
-				// should never be called on error
-				return true
-			},
-			wantNext:   false,
-			checkCalls: 0,
 		},
 	}
 
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			// Arrange
-			var nextCalled, failureCalled bool
-			var checkCallCount int
-			wrappedCheck := func(s *Session[string]) bool {
-				checkCallCount++
-				return tc.check(s)
-			}
-			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
-			onFailure := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { failureCalled = true })
-			handler := RequireSessionState(tc.mgr(), wrappedCheck, onFailure)(next)
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodGet, "/", nil)
+	for helperName, helper := range helpers {
+		for scenarioName, sc := range scenarios {
+			t.Run(helperName+"/"+scenarioName, func(t *testing.T) {
+				h := newLoadHarness(t)
+				r := sc.request(t, h)
+				if sc.storeFails {
+					h.store.FailWith("Load", errors.ErrInternal.Msg("disk failure at /var/lib/sessions"))
+				}
 
-			// Act
-			handler.ServeHTTP(w, r)
+				failureOutcome := ranNeither
+				outcome, rec := runHelper(h, helper.build(h.manager, onFailureRan(&failureOutcome)), r, sc.withoutScope)
+				if failureOutcome == ranOnFailure {
+					outcome = ranOnFailure
+				}
 
-			// Assert
-			assert.Equal(t, tc.wantNext, nextCalled)
-			assert.Equal(t, !tc.wantNext, failureCalled)
-			assert.Equal(t, tc.checkCalls, checkCallCount)
-		})
+				want := helper.want[scenarioName]
+				assert.Equal(t, want, outcome)
+				if want == ranNeither {
+					assert.Equal(t, http.StatusInternalServerError, rec.Code)
+					assert.Equal(t, "Internal Server Error", strings.TrimSpace(rec.Body.String()))
+					assert.NotContains(t, rec.Body.String(), "/var/lib", "internal detail not exposed")
+				}
+			})
+		}
 	}
 }
 
-func TestGuestOnly(t *testing.T) {
-	type testCase struct {
-		mgr      func() SessionManager[string]
-		wantNext bool
-	}
+func TestRequireSessionState_CheckNotCalledWithoutSession(t *testing.T) {
+	h := newLoadHarness(t)
+	called := false
+	check := func(*Session[testSession]) bool { called = true; return true }
+	outcome, _ := runHelper(h, RequireSessionState(h.manager, check, http.NotFoundHandler()), cookieRequest(), false)
+	assert.Equal(t, ranNeither, outcome, "next not run")
+	assert.False(t, called)
+}
 
-	tests := map[string]testCase{
-		"no_session_calls_next": {
-			mgr: func() SessionManager[string] {
-				return &stubSessionManager[string]{session: newSession[string](true)}
-			},
-			wantNext: true,
-		},
-		"get_error_calls_next": {
-			mgr: func() SessionManager[string] {
-				return &stubSessionManager[string]{err: errors.New("decode error")}
-			},
-			wantNext: true,
-		},
-		"existing_session_calls_failure": {
-			mgr: func() SessionManager[string] {
-				return &stubSessionManager[string]{session: newSession[string](false)}
-			},
-			wantNext: false,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			// Arrange
-			var nextCalled, failureCalled bool
-			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { nextCalled = true })
-			onFailure := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { failureCalled = true })
-			handler := GuestOnly(tc.mgr(), onFailure)(next)
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodGet, "/", nil)
-
-			// Act
-			handler.ServeHTTP(w, r)
-
-			// Assert
-			assert.Equal(t, tc.wantNext, nextCalled)
-			assert.Equal(t, !tc.wantNext, failureCalled)
+func TestRequireSession_NewSessionCountsAsPresent(t *testing.T) {
+	h := newLoadHarness(t)
+	create := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, err := h.manager.New(r)
+			require.NoError(t, err)
+			next.ServeHTTP(w, r)
 		})
 	}
+	outcome, _ := runHelper(h, func(next http.Handler) http.Handler {
+		return create(RequireSession(h.manager, http.NotFoundHandler())(next))
+	}, cookieRequest(), false)
+	assert.Equal(t, ranNext, outcome)
+}
+
+func TestAuthHelpers_OnFailureCanInspectAndClear(t *testing.T) {
+	h := newLoadHarness(t)
+	onFailure := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := h.manager.Load(r)
+		assert.ErrorIs(t, err, ErrInvalidSession, "cached outcome visible to onFailure")
+		assert.NoError(t, h.manager.Delete(w, r))
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	_, rec := runHelper(h, RequireSession(h.manager, onFailure), cookieRequest("garbage"), false)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assertCleared(t, rec)
 }
