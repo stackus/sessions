@@ -44,10 +44,12 @@ const (
 //
 // FileStore is safe for concurrent use within one process. Several processes
 // sharing one directory get atomic writes, but an update racing a delete in
-// another process may bring the deleted record back.
+// another process may bring the deleted record back. On Windows, a file that is
+// open cannot be replaced or removed, so a write racing a read in another
+// process can fail with an operational error.
 type FileStore struct {
 	dir    string
-	mu     sync.Mutex // serializes replace/remove so they cannot interleave
+	mu     sync.RWMutex // write-held for replace/remove, read-held while reading a record
 	rand   io.Reader
 	rename func(oldpath, newpath string) error
 	now    func() time.Time
@@ -97,6 +99,11 @@ func (s *FileStore) Load(_ context.Context, credential string, params StoreParam
 	if err != nil {
 		return nil, err
 	}
+
+	// Windows cannot replace or remove a file that is open, so reads exclude
+	// replace and remove.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	f, err := os.Open(path)
 	if err != nil {
