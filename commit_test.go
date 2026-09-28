@@ -1,9 +1,12 @@
 package sessions
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -564,6 +567,165 @@ func TestSave_PassesExpiryAndSizeToComponents(t *testing.T) {
 		{MaxRecordSize: 32 << 10},                     // Load: expiry not yet known
 		{ExpiresAt: expires, MaxRecordSize: 32 << 10}, // Update keeps the expiry
 	}, h.store.Params())
+}
+
+// subjectSession is a values type that implements SubjectIdentifier.
+type subjectSession struct {
+	UserID int    `json:"user_id"`
+	CSRF   string `json:"csrf"`
+}
+
+func (v subjectSession) SubjectID() string {
+	if v.UserID == 0 {
+		return ""
+	}
+	return strconv.Itoa(v.UserID)
+}
+
+func TestSave_SubjectIDFromValues(t *testing.T) {
+	fileStore, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	store := &recordingStore{Store: fileStore}
+	cookie, err := NewCookieTransport("session", CookieTransportSecure(false))
+	require.NoError(t, err)
+	enc, err := NewHMACEncoder(randomBytes(t, 32))
+	require.NoError(t, err)
+	manager, err := NewManager[subjectSession](cookie, enc, store)
+	require.NoError(t, err)
+
+	do := func(credential string, fn func(w http.ResponseWriter, r *http.Request)) {
+		t.Helper()
+		var r *http.Request
+		if credential == "" {
+			r = cookieRequest()
+		} else {
+			r = cookieRequest(credential)
+		}
+		manager.Middleware()(http.HandlerFunc(fn)).ServeHTTP(httptest.NewRecorder(), r)
+	}
+	lastParams := func() StoreParams {
+		params := store.Params()
+		return params[len(params)-1]
+	}
+
+	var anonymous, authenticated string
+	do("", func(w http.ResponseWriter, r *http.Request) {
+		sess, err := manager.New(r, subjectSession{CSRF: "token"})
+		require.NoError(t, err)
+		require.NoError(t, sess.Save(w))
+		anonymous = sess.credential
+	})
+	assert.Empty(t, lastParams().SubjectID, "anonymous session is unassociated")
+
+	do(anonymous, func(w http.ResponseWriter, r *http.Request) {
+		_, err := manager.Load(r)
+		require.NoError(t, err)
+		sess, err := manager.New(r, subjectSession{UserID: 42})
+		require.NoError(t, err)
+		require.NoError(t, sess.Save(w))
+		authenticated = sess.credential
+	})
+	assert.Equal(t, "42", lastParams().SubjectID)
+	_, err = fileStore.Load(t.Context(), anonymous, testStoreParams())
+	assert.ErrorIs(t, err, ErrSessionNotFound, "login replacement revokes the anonymous credential")
+
+	do(authenticated, func(w http.ResponseWriter, r *http.Request) {
+		sess, err := manager.Load(r)
+		require.NoError(t, err)
+		require.NoError(t, sess.Extend())
+		require.NoError(t, sess.Save(w))
+	})
+	assert.Equal(t, "Update", store.Calls()[len(store.Calls())-1])
+	assert.Equal(t, "42", lastParams().SubjectID, "extension preserves the association")
+
+	do(authenticated, func(w http.ResponseWriter, r *http.Request) {
+		sess, err := manager.Load(r)
+		require.NoError(t, err)
+		require.NoError(t, sess.Update(func(v *subjectSession) { v.UserID = 0 }))
+		require.NoError(t, sess.Save(w))
+	})
+	assert.Empty(t, lastParams().SubjectID, "clearing the user removes the association")
+}
+
+func TestSave_SubjectIDEmptyWithoutIdentifier(t *testing.T) {
+	h := newLoadHarness(t)
+	h.do(t, cookieRequest(), func(w http.ResponseWriter, r *http.Request) {
+		sess, err := h.manager.New(r, testSession{UserID: 42})
+		require.NoError(t, err)
+		require.NoError(t, sess.Save(w))
+	})
+	assert.Empty(t, h.store.Params()[0].SubjectID)
+}
+
+type ctxTestKey struct{}
+
+// ctxStore records the ctxTestKey value each store call receives.
+type ctxStore struct {
+	Store
+	mu   sync.Mutex
+	seen map[string]any
+}
+
+func (s *ctxStore) see(ctx context.Context, method string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seen[method] = ctx.Value(ctxTestKey{})
+}
+
+func (s *ctxStore) Load(ctx context.Context, credential string, params StoreParams) ([]byte, error) {
+	s.see(ctx, "Load")
+	return s.Store.Load(ctx, credential, params)
+}
+
+func (s *ctxStore) Create(ctx context.Context, data []byte, params StoreParams) (string, error) {
+	s.see(ctx, "Create")
+	return s.Store.Create(ctx, data, params)
+}
+
+func (s *ctxStore) Update(ctx context.Context, credential string, data []byte, params StoreParams) (string, error) {
+	s.see(ctx, "Update")
+	return s.Store.Update(ctx, credential, data, params)
+}
+
+func (s *ctxStore) Delete(ctx context.Context, credential string) error {
+	s.see(ctx, "Delete")
+	return s.Store.Delete(ctx, credential)
+}
+
+func TestStore_ReceivesRequestContext(t *testing.T) {
+	fileStore, err := NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	store := &ctxStore{Store: fileStore, seen: map[string]any{}}
+	h := newTestHarnessWithStore(t, store)
+
+	// The value is placed outside Manager.Middleware, as client-info middleware would.
+	withValue := func(r *http.Request) *http.Request {
+		return r.WithContext(context.WithValue(r.Context(), ctxTestKey{}, "client-info"))
+	}
+
+	var credential string
+	h.do(t, withValue(cookieRequest()), func(w http.ResponseWriter, r *http.Request) {
+		sess, err := h.manager.New(r, testSession{UserID: 1})
+		require.NoError(t, err)
+		require.NoError(t, sess.Save(w))
+		credential = sess.credential
+	})
+	h.do(t, withValue(cookieRequest(credential)), func(w http.ResponseWriter, r *http.Request) {
+		sess, err := h.manager.Load(r)
+		require.NoError(t, err)
+		require.NoError(t, sess.Set(testSession{UserID: 2}))
+		require.NoError(t, sess.Save(w))
+	})
+	h.do(t, withValue(cookieRequest(credential)), func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, h.manager.Delete(w, r))
+	})
+
+	assert.Equal(t, map[string]any{
+		"Create": "client-info",
+		"Load":   "client-info",
+		"Update": "client-info",
+		"Delete": "client-info",
+	}, store.seen)
 }
 
 func TestSession_Timestamps(t *testing.T) {

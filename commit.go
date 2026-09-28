@@ -72,7 +72,7 @@ func (sc *scope[T]) create(w http.ResponseWriter, sess *Session[T]) error {
 		return err
 	}
 
-	credential, err := m.store.Create(ctx, record, m.storeParams(meta))
+	credential, err := m.store.Create(ctx, record, m.storeParams(sess.values, meta))
 	if err != nil {
 		return errors.Wrap(err, "session save: create record")
 	}
@@ -111,7 +111,7 @@ func (sc *scope[T]) update(w http.ResponseWriter, sess *Session[T]) error {
 		return err
 	}
 
-	credential, err := m.store.Update(sc.request.Context(), sess.credential, record, m.storeParams(sess.meta))
+	credential, err := m.store.Update(sc.request.Context(), sess.credential, record, m.storeParams(sess.values, sess.meta))
 	if err != nil {
 		return errors.Wrap(err, "session save: update record")
 	}
@@ -137,9 +137,13 @@ func (sc *scope[T]) update(w http.ResponseWriter, sess *Session[T]) error {
 	return nil
 }
 
-// storeParams returns the store parameters for writing a record with meta.
-func (m *Manager[T]) storeParams(meta envelopeMeta) StoreParams {
-	return StoreParams{ExpiresAt: meta.ExpiresAt, MaxRecordSize: m.settings.maxRecordSize}
+// storeParams returns the store parameters for writing values with meta.
+func (m *Manager[T]) storeParams(values T, meta envelopeMeta) StoreParams {
+	params := StoreParams{ExpiresAt: meta.ExpiresAt, MaxRecordSize: m.settings.maxRecordSize}
+	if s, ok := any(values).(SubjectIdentifier); ok {
+		params.SubjectID = s.SubjectID()
+	}
+	return params
 }
 
 // encodeRecord serializes and encodes values into a store record. Every

@@ -45,7 +45,10 @@
 // A session expires a fixed lifetime (WithLifetime) after it was first saved.
 // Session.ExpiresAt reports when, and Session.Extend restarts the lifetime.
 // The manager passes each record's expiry and the record size limit to the
-// store and transport, so neither is configured twice.
+// store and transport, so neither is configured twice. A values type that
+// implements SubjectIdentifier associates its sessions with an application
+// identity; the manager passes it to stores on writes for indexing and
+// revocation.
 //
 // # Errors
 //

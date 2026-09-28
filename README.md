@@ -237,8 +237,44 @@ store, err := sessions.NewFileStore("./sessions")
 Implement `Transport`, `Store`, or `Encoder`. The interfaces are small, and their doc comments define the contracts:
 
 - **`Transport`:** `Read` returns `ErrNoCredential` only when the credential is absent, and an error matching `ErrInvalidSession` when it is malformed or ambiguous. `Write` and `Clear` only work before the response is committed.
-- **`Store`:** records are opaque bytes. `Create` and `Update` receive the record's expiry in `StoreParams`, which a database store can use for a TTL, a cleanup job, or a `WHERE expires_at > now()` filter; the manager still checks expiry on every load. `Load` returns `ErrSessionNotFound` for a missing record, `Update` never creates one, and `Delete` succeeds when the record is already gone. A credential the store cannot interpret returns `ErrInvalidSession` and touches nothing. Report operational failures with a built-in category, never with the session kinds.
+- **`Store`:** records are opaque bytes. `Create` and `Update` receive the record's expiry in `StoreParams`, plus its `SubjectID` when the values type implements `SubjectIdentifier`. A database store can use expiry for a TTL or cleanup job, and index `subject_id` to find sessions to revoke. The manager still checks expiry on every load. `Load` returns `ErrSessionNotFound` for a missing record, `Update` never creates one, and `Delete` succeeds when the record is already gone. A credential the store cannot interpret returns `ErrInvalidSession` and touches nothing. Report operational failures with a built-in category, never with the session kinds.
 - **`Encoder`:** it must be safe for concurrent use and must not change or keep its input. `Decode` returns `ErrInvalidEncoding` for malformed or unauthenticated data and never returns partial output. Implement `RefreshDecoder` to ask for records to be re-encoded, as `RotatingEncoder` does.
+
+To associate sessions with an account, implement `SubjectIdentifier` on the values type with a value receiver. The manager calls it on every write, so the subject always matches the values:
+
+```go
+func (v Values) SubjectID() string {
+	if v.UserID == 0 {
+		return "" // anonymous, e.g. a login form's CSRF token
+	}
+	return strconv.FormatInt(v.UserID, 10)
+}
+```
+
+After authenticating, create a replacement session with `manager.New` to rotate the credential, and set the user in its values before `Save`. A custom database store can keep the subject ID in a nullable, indexed column and provide an application-authorized operation that deletes records for a subject. Its `Update` must update an existing row only, so it cannot recreate a revoked record. `CookieStore` has no server-side records and cannot revoke copied credentials.
+
+To record application details about a session, such as the client's IP address or user agent, read them from the `ctx` the store receives. It derives from the request, so a middleware that wraps `manager.Middleware()` can place values that every store call sees. Values added inside `manager.Middleware()` reach `Load` and `Delete`, but not `Save`, which uses the request as it entered the middleware.
+
+```go
+type clientKey struct{}
+
+type clientInfo struct{ IP, UserAgent string }
+
+func withClientInfo(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		info := clientInfo{IP: r.RemoteAddr, UserAgent: r.UserAgent()}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), clientKey{}, info)))
+	})
+}
+
+handler := withClientInfo(manager.Middleware()(app))
+
+// In the custom store:
+func (s *DBStore) Create(ctx context.Context, data []byte, params sessions.StoreParams) (string, error) {
+	info, _ := ctx.Value(clientKey{}).(clientInfo)
+	// INSERT ... (id, data, expires_at, subject_id, ip, user_agent) ...
+}
+```
 
 A store that hands the record to the client must be paired with an authenticating encoder.
 
